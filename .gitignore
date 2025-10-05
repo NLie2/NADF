@@ -1,0 +1,38 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+lib64/
+
+# Virtual environment
+.venv/
+lib64/
+lib/
+bin/
+include/
+share/
+etc/
+pyvenv.cfg
+.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+
+# UV
+uv.lock  # Optional: some people commit this, some don't
+
+# Data
+data/raw/*
+data/processed/*
+!data/**/.gitkeep
+
+# SECRETS
+.env
