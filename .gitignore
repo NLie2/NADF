@@ -30,7 +30,7 @@ __pycache__/
 uv.lock  # Optional: some people commit this, some don't
 
 # Data
-data/raw/*
+data/*
 data/processed/*
 !data/**/.gitkeep
 
