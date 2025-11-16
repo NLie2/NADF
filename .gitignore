@@ -38,3 +38,7 @@ data/processed/*
 .env
 .vscode/
 .vscode/
+
+
+# checkpoints
+checkpoints/

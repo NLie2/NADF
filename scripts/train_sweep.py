@@ -5,11 +5,12 @@ Train NADF probe models.
 import argparse
 import os
 
+import wandb
 from dotenv import load_dotenv
 
 from nadf.data.adversarial import load_or_create_dataset
 from nadf.data.datasets import create_regression_dataset
-from nadf.training.pipeline import save_augmented_dataset, train_probe_model
+from nadf.training.pipeline import train_probe_model
 
 # Load .env file
 load_dotenv()
@@ -18,6 +19,11 @@ load_dotenv()
 def parse_arguments():
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description="Train NADF probe")
+
+    # Wandb
+    parser.add_argument("--use-wandb", action="store_true", help="Enable wandb logging")
+    parser.add_argument("--wandb-project", type=str, default="nadf-probe", help="Wandb project name")
+    parser.add_argument("--wandb-entity", type=str, default=None, help="Wandb entity/team name")
 
     # Data
     parser.add_argument(
@@ -89,12 +95,32 @@ def print_header(args):
         if args.augmentation != "none"
         else "Augmentation: none"
     )
+    if args.use_wandb:
+        print(f"Wandb: enabled (project: {args.wandb_project})")
     print("=" * 60)
 
 
 def main():
     """Main training pipeline."""
     args = parse_arguments()
+
+    # Initialize wandb if enabled (either via --use-wandb flag or sweep)
+    use_wandb = args.use_wandb or wandb.run is not None
+
+    if use_wandb:
+        # If not already initialized by sweep, initialize now
+        if wandb.run is None:
+            wandb.init(project=args.wandb_project, entity=args.wandb_entity, config=vars(args))
+
+        # Override args with wandb config (for sweep parameters)
+        for key, value in wandb.config.items():
+            if hasattr(args, key):
+                setattr(args, key, value)
+
+        # Generate checkpoint name with wandb run info
+        if args.checkpoint_name is None:
+            args.checkpoint_name = f"{wandb.run.name}_{wandb.run.id}.pt"
+
     print_header(args)
 
     # Load adversarial dataset
@@ -108,11 +134,7 @@ def main():
         data_folder=args.cache_folder,
     )
 
-    # Apply augmentation if enabled
-    # augmentation_stats = apply_augmentation(dataset, args)
-
     # Create regression datasets
-    # datasets = create_train_dataset(dataset, args)
     datasets = create_regression_dataset(
         dataset["z"],
         dataset["y"],
@@ -122,12 +144,12 @@ def main():
         y_clean_pool=dataset["y_clean_pool"],
     )
 
-    # Save augmented dataset if applicable
-    if args.augmentation != "none" and augmentation_stats:
-        save_augmented_dataset(dataset, args)
-
     # Train model
-    train_probe_model(datasets, args)
+    train_probe_model(datasets, args, use_wandb=use_wandb)
+
+    # Finish wandb run if active
+    if use_wandb and wandb.run is not None:
+        wandb.finish()
 
     print("\n✓ Training complete!")
 

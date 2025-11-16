@@ -68,14 +68,96 @@ def find_pos_neg_samples_regression(
 
 
 def create_regression_dataset(
-    z_all,
-    y_all,
-    z_clean_reference,
-    y_clean_reference,
+    z_clean,
+    y_clean,
+    z_adv,
+    y_adv,
     distance_metric="euclidean",
     clean_upweight_factor=1.0,
-    z_clean_reference_full=None,
-    y_clean_reference_full=None,
+    z_clean_pool=None,
+    y_clean_pool=None,
+    split="train",
+):
+    """
+    Create regression dataset with distance targets and sample weights.
+
+    Args:
+        z_clean (torch.Tensor): Clean representations.
+        y_clean (torch.Tensor): Labels for clean representations.
+        z_adv (torch.Tensor): Adversarial representations.
+        y_adv (torch.Tensor): Labels for adversarial representations.
+        distance_metric (str): The distance metric for finding positives.
+        clean_upweight_factor (float): Weight factor for clean examples (>1 upweights clean).
+        z_clean_pool (torch.Tensor, optional): Full pool for negative sampling.
+        y_clean_pool (torch.Tensor, optional): Full labels for negative sampling.
+
+    Returns:
+        tuple: (anchors, distances, labels, sample_weights)
+    """
+    # Normalize the clean pool once
+    z_clean_norm = functional.normalize(z_clean, p=2, dim=1)
+
+    # Normalize full reference pool if provided
+    z_clean_pool_norm = None
+    if z_clean_pool is not None:
+        z_clean_pool_norm = functional.normalize(z_clean_pool, p=2, dim=1)
+
+    # Process clean examples
+    clean_anchors, clean_distances, clean_labels, clean_weights = [], [], [], []
+    for i in range(len(z_clean)):
+        anchor_z = functional.normalize(z_clean[i].unsqueeze(0), p=2, dim=1).squeeze(0)
+        anchor_y = y_clean[i]
+
+        # Clean examples have distance 0 (matching to themselves)
+        distance = torch.tensor(0.0)
+
+        clean_anchors.append(anchor_z)
+        clean_distances.append(distance)
+        clean_labels.append(anchor_y)
+        clean_weights.append(clean_upweight_factor)
+
+    # Process adversarial examples - find distance to nearest clean example
+    adv_anchors, adv_distances, adv_labels, adv_weights = [], [], [], []
+    for i in range(len(z_adv)):
+        anchor_z = functional.normalize(z_adv[i].unsqueeze(0), p=2, dim=1).squeeze(0)
+        anchor_y = y_adv[i]
+
+        z_p, z_n = find_pos_neg_samples_regression(
+            anchor_z,
+            anchor_y,
+            z_clean_norm,
+            y_clean,
+            distance_metric,
+            z_clean_pool_norm,
+            y_clean_pool,
+        )
+
+        distance = torch.linalg.norm(anchor_z - z_p)
+
+        adv_anchors.append(anchor_z)
+        adv_distances.append(distance)
+        adv_labels.append(anchor_y)
+        adv_weights.append(1.0)
+
+    # Stack clean and adversarial together
+    all_anchors = clean_anchors + adv_anchors
+    all_distances = clean_distances + adv_distances
+    all_labels = clean_labels + adv_labels
+    all_weights = clean_weights + adv_weights
+
+    return (torch.stack(all_anchors), torch.stack(all_distances), torch.stack(all_labels), torch.tensor(all_weights))
+
+
+def create_regression_dataset_old1(
+    z_all,
+    y_all,
+    z_clean,
+    y_clean,
+    distance_metric="euclidean",
+    clean_upweight_factor=1.0,
+    z_clean_pool=None,
+    y_clean_pool=None,
+    split="train",
 ):
     """
     Create regression dataset with distance targets and sample weights.
@@ -83,12 +165,12 @@ def create_regression_dataset(
     Args:
         z_all (torch.Tensor): All representations (clean + adversarial).
         y_all (torch.Tensor): Corresponding labels.
-        z_clean_reference (torch.Tensor): Pool of clean representations for positive sampling.
-        y_clean_reference (torch.Tensor): Labels for the clean representations.
+        z_clean (torch.Tensor): Pool of clean representations for positive sampling.
+        y_clean(torch.Tensor): Labels for the clean representations.
         distance_metric (str): The distance metric for finding positives.
         clean_upweight_factor (float): Weight factor for clean examples (>1 upweights clean).
-        z_clean_reference_full (torch.Tensor, optional): Full pool for negative sampling.
-        y_clean_reference_full (torch.Tensor, optional): Full labels for negative sampling.
+        z_clean_pool (torch.Tensor, optional): Full pool for negative sampling.
+        y_clean_pool (torch.Tensor, optional): Full labels for negative sampling.
 
     Returns:
         tuple: (anchors, distances, labels, sample_weights)
@@ -98,7 +180,8 @@ def create_regression_dataset(
         return torch.tensor([]), torch.tensor([]), torch.tensor([]), torch.tensor([])
 
     # Normalize the clean pool once
-    z_clean_reference_norm = functional.normalize(z_clean_reference, p=2, dim=1)
+    z_clean_norm = functional.normalize(z_clean, p=2, dim=1)
+    print("normalized")
 
     for i in range(len(z_all)):
         # Normalize anchor the SAME way as pool
@@ -107,18 +190,18 @@ def create_regression_dataset(
 
         # Use the normalized pool for finding matches
         # Normalize full reference pool if provided
-        z_clean_reference_full_norm = None
-        if z_clean_reference_full is not None:
-            z_clean_reference_full_norm = functional.normalize(z_clean_reference_full, p=2, dim=1)
+        z_clean_pool_norm = None
+        if z_clean_pool is not None:
+            z_clean_pool_norm = functional.normalize(z_clean_pool, p=2, dim=1)
 
         z_p, z_n = find_pos_neg_samples_regression(
             anchor_z,
             anchor_y,
-            z_clean_reference_norm,
-            y_clean_reference,
+            z_clean_norm,
+            y_clean,
             distance_metric,
-            z_clean_reference_full_norm,
-            y_clean_reference_full,
+            z_clean_pool_norm,
+            y_clean_pool,
         )
 
         # Calculate distance to determine if this is a clean example
@@ -135,6 +218,41 @@ def create_regression_dataset(
         sample_weights.append(weight)
 
     return torch.stack(anchors), torch.stack(distances), torch.stack(labels), torch.tensor(sample_weights)
+
+
+def create_regression_dataset_old(z_all, y_all, z_clean_pool, y_clean_pool, distance_metric="euclidean"):
+    """
+    Creates a triplet dataset (anchor, positive, negative) from representations.
+
+    Args:
+        z_all (torch.Tensor): All representations (clean + adversarial).
+        y_all (torch.Tensor): Corresponding labels.
+        z_clean_pool (torch.Tensor): Pool of clean representations to sample from.
+        y_clean_pool (torch.Tensor): Labels for the clean pool.
+        distance_metric (str): The distance metric for finding positives.
+
+    Returns:
+        (torch.Tensor, torch.Tensor, torch.Tensor): anchors, positives, negatives.
+    """
+    anchors, distances, labels = [], [], []
+
+    if len(z_all) == 0:
+        return torch.tensor([]), torch.tensor([]), torch.tensor([])
+
+    # Normalize the clean pool once
+    z_clean_pool = F.normalize(z_clean_pool, p=2, dim=1)
+
+    for i in range(len(z_all)):
+        anchor_z = F.normalize(z_all[i], p=2, dim=0)  # L2 normalize
+        anchor_y = y_all[i]
+
+        z_p, z_n = find_pos_neg_samples_regression(anchor_z, anchor_y, z_clean_pool, y_clean_pool, distance_metric)
+
+        anchors.append(anchor_z)
+        distances.append(torch.linalg.norm(anchor_z - z_p))  # Already normalized from the pool
+        labels.append(anchor_y)  # Already normalized from the pool
+
+    return torch.stack(anchors), torch.stack(distances), torch.stack(labels)
 
 
 def create_binary_classification_dataset(z_clean, z_adv):

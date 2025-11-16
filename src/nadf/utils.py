@@ -78,6 +78,9 @@ def get_data(args=None, return_biased=False, abtrain=False, **kwargs):
     if data_path_override and hasattr(args, "path"):
         args.path = data_path_override
 
+    # Check if dataset should be downloaded (default to False to avoid SSL issues on cluster)
+    download_dataset = os.getenv("DOWNLOAD_DATASET", "false").lower() in ["true", "1", "yes"]
+
     eval_loaders = {}
     if args.dataset == "cifar100":
         data_class = "CIFAR100"
@@ -119,8 +122,9 @@ def get_data(args=None, return_biased=False, abtrain=False, **kwargs):
     split = {"split": "test"} if "svhn" in args.dataset else {"train": False}
 
     # Set download=False to avoid SSL issues on cluster where data already exists
+    # Can be overridden with DOWNLOAD_DATASET environment variable
     te_data = getattr(datasets, data_class)(
-        root=args.path, download=False, transform=transforms.Compose(trans), **split
+        root=args.path, download=download_dataset, transform=transforms.Compose(trans), **split
     )
 
     tr_data = None
@@ -128,15 +132,15 @@ def get_data(args=None, return_biased=False, abtrain=False, **kwargs):
     split = {"split": "train"} if "svhn" in args.dataset else {"train": True}
     if getattr(args, "val_criterion", None) and args.val_ratio > 0 and args.val_ratio < 1:
         tr_full_data = getattr(datasets, data_class)(
-            root=args.path, download=False, transform=transforms.Compose(trans), **split
+            root=args.path, download=download_dataset, transform=transforms.Compose(trans), **split
         )
 
         tr_full_eval_data = getattr(datasets, data_class)(
-            root=args.path, download=False, transform=transforms.Compose(trans), **split
+            root=args.path, download=download_dataset, transform=transforms.Compose(trans), **split
         )
 
         val_full_data = getattr(datasets, data_class)(
-            root=args.path, download=False, transform=transforms.Compose(trans), **split
+            root=args.path, download=download_dataset, transform=transforms.Compose(trans), **split
         )
 
         dataset_length = len(tr_full_data)
@@ -155,10 +159,10 @@ def get_data(args=None, return_biased=False, abtrain=False, **kwargs):
         val_data = IndexedDataset(val_data)
     else:
         tr_data = getattr(datasets, data_class)(
-            root=args.path, download=False, transform=transforms.Compose(trans), **split
+            root=args.path, download=download_dataset, transform=transforms.Compose(trans), **split
         )
         tr_eval_data = getattr(datasets, data_class)(
-            root=args.path, download=False, transform=transforms.Compose(trans), **split
+            root=args.path, download=download_dataset, transform=transforms.Compose(trans), **split
         )
     tr_data, tr_eval_data, te_data = IndexedDataset(tr_data), IndexedDataset(tr_eval_data), IndexedDataset(te_data)
 
@@ -383,7 +387,7 @@ def generate_x_adv(
     return torch.tensor(x_adv).float().to(device), torch.tensor(x_orig).float().to(device)
 
 
-def filter_successful_attacks(model, x_clean_batch, y_clean_batch, x_adv_batch, device):
+def filter_successful_attacks(model, x_clean_batch, y_clean_batch, x_adv_batch, device, target_class=-1, verbose=False):
     """
     Filter adversarial examples to keep only successful attacks.
 
@@ -392,9 +396,13 @@ def filter_successful_attacks(model, x_clean_batch, y_clean_batch, x_adv_batch, 
     - y_clean_batch[i]: true label for that image
     - x_adv_batch[i]: adversarial perturbation of x_clean_batch[i]
 
-    Returns boolean mask where True indicates successful attack:
-    - Model correctly classifies x_clean_batch[i]
-    - Model incorrectly classifies x_adv_batch[i]
+    Args:
+        target_class: If != -1, only keep attacks that are predicted as this class
+        verbose: If True, return detailed statistics
+
+    Returns:
+        successful_attack_idx: Boolean mask where True indicates successful attack
+        stats: Dictionary with statistics (only if verbose=True, otherwise None)
     """
     # Defensive check: ensure batch sizes match
     assert len(x_clean_batch) == len(y_clean_batch) == len(x_adv_batch), (
@@ -410,8 +418,39 @@ def filter_successful_attacks(model, x_clean_batch, y_clean_batch, x_adv_batch, 
         )
         pred_clean = model(x_clean_batch).argmax(dim=1)
         pred_adv = model(x_adv_batch).argmax(dim=1)
-        successful_attack_idx = (pred_clean == y_clean_batch) & (pred_adv != y_clean_batch)
-    return successful_attack_idx
+
+        # Basic successful attack filter
+        successful_attack_idx = (pred_clean == y_clean_batch) & (
+            pred_adv != y_clean_batch
+        )  # items that were correctly classified and are now misclassified
+
+        # Additional target class filtering if specified
+        if target_class != -1:
+            target_class_idx = pred_adv == target_class
+            successful_attack_idx = successful_attack_idx & target_class_idx
+
+        # Only compute detailed stats if verbose
+        stats = None
+        if verbose:
+            total = len(x_clean_batch)
+            successful_attacks_basic = ((pred_clean == y_clean_batch) & (pred_adv != y_clean_batch)).sum().item()
+
+            # Get successful attack mask before target class filtering
+            successful_mask = (pred_clean == y_clean_batch) & (pred_adv != y_clean_batch)
+
+            stats = {
+                "total": total,
+                "successful_attacks": successful_attacks_basic,
+                "pred_adv_distribution(successful_only)": pred_adv[successful_mask].cpu(),
+                "y_clean_distribution(successful_only)": y_clean_batch[successful_mask].cpu(),  # Add clean classes
+            }
+
+            if target_class != -1:
+                successful_with_target = successful_attack_idx.sum().item()
+                stats["target_class"] = target_class
+                stats["successful_with_target"] = successful_with_target
+
+    return successful_attack_idx.cpu(), stats
 
 
 # * GENERAL UTILS

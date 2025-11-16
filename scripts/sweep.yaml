@@ -1,0 +1,77 @@
+program: train.py
+method: bayes
+metric:
+  name: val_loss
+  goal: minimize
+
+parameters:
+  # Learning parameters
+  lr:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.001
+  
+  weight_decay:
+    distribution: log_uniform_values
+    min: 0.00001
+    max: 0.01
+  
+  batch_size:
+    values: [256, 512, 1024]
+  
+  epochs:
+    value: 100  # Keep fixed or sweep: values: [50, 100, 150]
+  
+  # Model architecture
+  model_type:
+    values: ['mlp', 'transformer']
+  
+  depth:
+    values: [3, 5, 7]
+  
+  width:
+    values: [128, 256, 512]
+  
+  activation:
+    values: ['relu', 'gelu', 'silu']
+  
+  # Loss function
+  loss:
+    values: ['mse', 'huber']
+  
+  huber_delta:
+    distribution: uniform
+    min: 0.01
+    max: 0.1
+  
+  # Upweighting
+  upweight:
+    distribution: uniform
+    min: 0.5
+    max: 2.0
+  
+  # Data augmentation
+  augmentation:
+    values: ['none', 'minimal', 'standard', 'strong']
+  
+  num_augmentations:
+    values: [1, 2, 3]
+  
+  # Fixed parameters (not swept)
+  target_class:
+    value: -1
+  
+  data_folder:
+    value: ${RESNET_MODEL_FOLDER}
+  
+  cache_folder:
+    value: '/rds/general/user/nk1924/home/nadf/data'
+  
+  save_dir:
+    value: 'trained_models'
+
+# Optional: Early termination for poorly performing runs
+early_terminate:
+  type: hyperband
+  min_iter: 10
+  eta: 3

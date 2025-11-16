@@ -15,9 +15,11 @@ dependencies = [
     "numpy>=2.0.2",
     "pandas>=2.3.3",
     "python-dotenv>=1.1.1",
+    "seaborn>=0.13.2",
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "tqdm>=4.66.0",
+    "wandb>=0.22.3",
 ]
 
 [tool.hatch.build.targets.wheel]
