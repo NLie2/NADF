@@ -166,6 +166,7 @@ def train_probe_model(datasets: Dict, args: Any, use_wandb: bool = False) -> Non
         },
         attack_config={
             "target_class": args.target_class,
+            "positive_strategy": args.positive_strategy,
         },
         save_path=checkpoint_path,
     )
@@ -342,6 +343,7 @@ def _generate_checkpoint_name(args: Any) -> str:
         f"{args.loss}",
         f"up{args.upweight}x",
         f"target_class{args.target_class}",
+        f"positive_strategy{args.positive_strategy}",
     ]
 
     if args.augmentation != "none":
