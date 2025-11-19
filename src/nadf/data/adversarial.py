@@ -27,12 +27,19 @@ def load_or_create_dataset(
     splits=None,
     recreate=False,
     verbose=False,
+    cache_dir=None,
 ):
     """
     Complete dataset creation pipeline.
 
     Args:
+        folder: Model folder path
+        target_class: Target class for attacks (-1 for untargeted)
+        num_attacks_eps_coef: List of (num_attacks, eps_coef) tuples
+        splits: List of splits to process (default: ["train", "val", "test"])
+        recreate: If True, recreate dataset even if cache exists
         verbose: If True, print detailed statistics about filtering
+        cache_dir: Custom directory for saving cache (default: None, saves to model folder)
 
     Returns:
         Dict of dicts containing (all split by train/val/test):
@@ -49,7 +56,7 @@ def load_or_create_dataset(
         num_attacks_eps_coef = [(1, 1)]
 
     # Check for cached dataset
-    cache_path = _get_cache_path(folder, target_class, num_attacks_eps_coef)
+    cache_path = _get_cache_path(folder, target_class, num_attacks_eps_coef, cache_dir)
     if os.path.exists(cache_path) and not recreate:
         print(f"Loading cached dataset from {cache_path}")
         return _load_cached_dataset(cache_path)
@@ -269,26 +276,49 @@ def _extract_representations(model, clean_data, adv_data, splits, device, target
 
         z_clean = clean_data[split]["z_clean"]
 
-        # Extract representations and predictions for clean examples
+        # Batch size for representation extraction
+        batch_size = 512
+        
+        # Extract representations and predictions for clean examples (in batches)
         model.eval()
+        pred_clean_list = []
         with torch.no_grad():
-            # Get predictions for clean examples
-            logits_clean = model(x_clean.to(device), repr=False)
-            pred_clean = torch.argmax(logits_clean, dim=1).cpu()
-            # get predictions for adversarial examples
-            del logits_clean
+            # Get predictions for clean examples in batches
+            for i in range(0, len(x_clean), batch_size):
+                batch = x_clean[i:i+batch_size].to(device)
+                logits_batch = model(batch, repr=False)
+                pred_clean_list.append(torch.argmax(logits_batch, dim=1).cpu())
+                del logits_batch, batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            pred_clean = torch.cat(pred_clean_list)
 
-        # Extract representations for adversarial examples
+        # Extract representations for adversarial examples (in batches)
         if len(x_adv) > 0:
+            z_adv_list = []
             with torch.no_grad():
-                # extract representations for adversarial examples
-                z_adv = model(x_adv.to(device), repr=True).cpu()
+                for i in range(0, len(x_adv), batch_size):
+                    batch = x_adv[i:i+batch_size].to(device)
+                    z_batch = model(batch, repr=True).cpu()
+                    z_adv_list.append(z_batch)
+                    del batch, z_batch
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                z_adv = torch.cat(z_adv_list)
         else:
             z_adv = torch.tensor([])
 
-        # Extract representations for combined (clean + adv)
+        # Extract representations for combined (clean + adv) (in batches)
+        z_combined_list = []
         with torch.no_grad():
-            z_combined = model(x_combined.to(device), repr=True).cpu()
+            for i in range(0, len(x_combined), batch_size):
+                batch = x_combined[i:i+batch_size].to(device)
+                z_batch = model(batch, repr=True).cpu()
+                z_combined_list.append(z_batch)
+                del batch, z_batch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            z_combined = torch.cat(z_combined_list)
 
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
@@ -756,7 +786,7 @@ def _generate_adversarial_examples(
     return adv_data
 
 
-def _get_cache_path(folder, target_class, num_attacks_eps_coef):
+def _get_cache_path(folder, target_class, num_attacks_eps_coef, cache_dir=None):
     """
     Generate cache path for adversarial dataset.
 
@@ -764,8 +794,14 @@ def _get_cache_path(folder, target_class, num_attacks_eps_coef):
         folder: Model folder path
         target_class: Target class for attacks (-1 for untargeted)
         num_attacks_eps_coef: List of (num_attacks, eps_coef) tuples
+        cache_dir: Custom directory for saving cache (default: None, saves to model folder)
     """
-    base = os.path.join(folder, "adversarial_examples")
+    # Use custom cache directory if provided, otherwise use model folder
+    if cache_dir is not None:
+        base = os.path.join(cache_dir, "adversarial_examples")
+    else:
+        base = os.path.join(folder, "adversarial_examples")
+    
     # Create a unique identifier for this attack configuration
     attack_configs = "_".join([f"{n}x{ec}" for n, ec in num_attacks_eps_coef])
     attack_name = f"pgd_l2_{attack_configs}"
